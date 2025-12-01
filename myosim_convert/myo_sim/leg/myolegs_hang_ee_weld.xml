@@ -1,0 +1,87 @@
+<?xml version="1.0" ?>
+<mujoco model="MyoSuite's MyoLeg Model">
+<!-- =================================================
+    Copyright 2020 Vikash Kumar, Vittorio Caggiano, Huawei Wang
+    Model   :: Myo Hand (MuJoCoV2.0)
+    Author  :: Vikash Kumar (vikashplus@gmail.com), Vittorio Caggiano, Huawei Wang
+    source  :: https://github.com/vikashplus
+    License :: Under Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0 Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.
+====================================================== -->
+    <option>
+        <flag gravity="disable" contact="disable"/>
+    </option>
+    <visual>
+        <!-- <map force="0.1" znear="0.01" zfar="30" /> -->
+
+        <!-- <rgba haze="0.15 0.25 0.35 1" /> -->
+        <global offwidth="1920" offheight="1080" elevation="-20" azimuth="120" />
+        <quality offsamples="8" />
+    </visual>
+
+    <include file="../../scene/flat_floor_scene.xml"/>
+    <include file="../torso/assets/myotorso_rigid_assets.xml"/>
+    <include file="../leg/assets/myolegs_assets.xml"/>
+    <include file="../leg/assets/myolegs_tendon.xml"/>
+    <include file="../leg/assets/myolegs_muscle.xml"/>
+    <compiler angle="radian" meshdir=".." texturedir=".."/>
+
+    <!-- <asset>
+        <hfield name="terrain" size="7 7 1 0.001" nrow="100" ncol="100"/>
+    </asset> -->
+
+    <worldbody>
+        <!-- <geom name="terrain" type="hfield" hfield="terrain" pos="0 0 -0.005" material="matfloor" conaffinity="1" contype="1" rgba="1 1 1 0"/> -->
+        <site name="pelvis_target" size="0.02" pos="0 0 .92" group="4"/>
+
+        <body name="root" pos="0 0 1.5" euler="0 0 0">
+            <include file="../torso/assets/myotorso_rigid_chain.xml"/>
+            <include file="../leg/assets/myolegs_chain.xml"/>
+            <!-- <freejoint name="root"/> -->
+        </body>
+
+        <body name="calcn_weld_body_outer" pos="0.0 0 0.0" euler="0 0 0">
+            <!-- <joint name="ee_weld_slide_x" type="slide" axis="1 0 0" limited="true" range="-0.0001 0.0001"/>
+            <joint name="ee_weld_slide_y" type="slide" axis="0 1 0" limited="true" range="-0.0001 0.0001"/>
+            <joint name="ee_weld_slide_z" type="slide" axis="0 0 1" limited="true" range="-0.0001 0.0001"/> -->
+            <joint name="ee_weld_slide_x" type="slide" axis="1 0 0" limited="true" range="-0.0001 0.0001" solreflimit="0.002 1"/>
+            <joint name="ee_weld_slide_y" type="slide" axis="0 1 0" limited="true" range="-0.0001 0.0001" solreflimit="0.002 1"/>
+            <joint name="ee_weld_slide_z" type="slide" axis="0 0 1" limited="true" range="-0.0001 0.0001" solreflimit="0.002 1"/>
+            <!-- <joint name="ee_weld_ball" type="ball" limited="true" range = "0 0.0001"/> -->
+            <body name="calcn_weld_body" pos="0.0 0 0.0" euler="0 0 0">
+                <joint type="ball"/>
+                <geom name="ee_weld_geom" type="box" size="0.02 0.02 0.02" pos="0 0 0"  rgba="1 1 0 1" contype="0" conaffinity="0"/>
+            </body>
+            <!-- <joint name="ee_weld_hinge_y" type="hinge" axis="0 1 0" limited="false"/> -->
+            <!-- <joint name="ee_weld_hinge_z" type="slide" axis="0 0 1" limited="true" range="-0.0001 0.0001"/>
+            <joint name="ee_weld_hinge_y" type="slide" axis="0 1 0" limited="true" range="-0.0001 0.0001"/>
+            <joint name="ee_weld_hinge_x" type="slide" axis="1 0 0" limited="true" range="-0.0001 0.0001"/> -->
+            <site name="ee_weld_site" size="0.03" pos="0 0 0" group="4"/>
+            <geom name="ee_weld_geom_outer" type="box" size="0.02 0.02 0.02" pos="0 0 0"  rgba="1 0 0 1" contype="0" conaffinity="0"/>
+
+        </body>
+        <body name="target_body" pos="0 0 0" euler="0 0 0">
+            <site size="0.03" pos="0 0 0" rgba="1 1 0 0.5" group="4"/>
+        </body>
+        <body name="force_direction_body" pos="0 0 0" euler="0 0 0">
+            <site size="0.03" pos="0 0 0" rgba="1 0 1 0.5" group="4"/>
+        </body>
+
+        
+    </worldbody>
+
+    <equality>
+        <weld name="calcn_weld" body1="calcn_weld_body" body2="talus_r" relpose="0 0 0 1 0 0 0" anchor="0.0 0 0" solref="0.002 1"/>
+    </equality>
+
+    <!-- Sensors to measure reaction forces at the end-effector weld -->
+    <sensor>
+        <jointlimitfrc name="ee_weld_slide_x_limitfrc" joint="ee_weld_slide_x"/>
+        <jointlimitfrc name="ee_weld_slide_y_limitfrc" joint="ee_weld_slide_y"/>
+        <jointlimitfrc name="ee_weld_slide_z_limitfrc" joint="ee_weld_slide_z"/>
+    </sensor>
+
+    <keyframe>
+        <!-- <key qpos='0.0795042 -0.0337434 -0.573293 0.00157309 0.000724723 0.2835 0.0192782 0.0917051 -0.280951 0.117233 -0.317938 -0.023636 0.0457227 -0.0728533 0.0374817 -0.0166084 -0.601184 -0.000605989 0.000299491 0.104786 0.00790038 -0.0368857 -0.350807 0.158145 -0.523661 -0.0158238 0.0504868 -0.000546755'/> -->
+    </keyframe>
+
+</mujoco>

@@ -1,0 +1,70 @@
+<mujoco model="equality_test">
+        <compiler angle="radian" meshdir=".." texturedir=".."/>
+        <asset>
+            <!-- Scene -©vk©-->
+            <texture builtin="gradient" height="1536" rgb1="1 1 1" rgb2="1 1 1" type="skybox" width="256"/>
+            
+            <texture name="texfloor" type="2d" builtin="checker" width="512" height="512" rgb1="0.561 0.725 0.937"  rgb2="0.384 0.494 0.639"  mark="edge" markrgb="1 1 1" gridlayout="8" />
+            <material name="matfloor" reflectance="0" texture="texfloor" texrepeat="1 1" texuniform="true" />
+            <hfield name="terrain" size="7 7 1 0.001" nrow="100" ncol="100"/>
+        </asset>
+    
+        <statistic extent="5" center="0 -1 1"/>
+    
+        <visual>
+            <scale light=".05" framewidth=".005"/>
+            <headlight ambient=".4 .4 .4" diffuse="0.50 0.50 0.50" specular="0.50 0.50 0.50"/>
+            <!-- <headlight ambient="0.3 0.3 0.3" diffuse="0.4 0.4 0.4" specular="0.5 0.5 0.5"/> -->
+            <global elevation="-15"/>
+            <rgba actuator='0 0 1 1' actuatorpositive='1 0 0 1' actuatornegative='0.0 0.0 1.0 1'/>
+        </visual>
+    
+        <!-- Add files to the world -©vk©-->
+        <worldbody>
+            <camera name="_" pos="-1.0 0.05 0.7" xyaxes="0 -1 0 0 0 1" mode="fixed"/>
+
+
+            <body name="foot" pos="0 0 0.5" euler="0 0 0">
+                <joint name="foot_joint" type="free"/>
+                
+                <geom name="test_geom" type="box" size="0.03 0.03 0.03" pos="0 0 0" mass="10.0" rgba="0 0 1 1"/>
+                <!-- <geom name="test_geom2" type="box" size="0.03 0.03 0.03" pos="0.1 0 0" mass="10.0" rgba="0 1 0 1"/> -->
+                <!-- <site name="test_site" type="box" size="0.03 0.03 0.03" pos="0 0 0" group="1"/>
+                <site name="test_site2" type="box" size="0.03 0.03 0.03" pos="0 0.1 0" group="1"/> -->
+            </body>
+
+            <body name="weld_dst" pos="0 0 0.8" euler="0 0 0">
+                <inertial diaginertia="0.01 0.01 0.01" mass="0.1" pos="0 0 0"/>
+
+                <!-- <joint name="weld_dst_joint" type="free"/> -->
+                <joint name="slide_x" type="slide" axis="1 0 0" limited="true" range="0 0.0001" solreflimit="0.001" margin="-0.0001" damping="100" stiffness="1000"/>
+                <joint name="slide_y" type="slide" axis="0 1 0" limited="true" range="0 0.0001" solreflimit="0.001" margin="-0.0001" damping="100" stiffness="1000"/>
+                <joint name="slide_z" type="slide" axis="0 0 1" limited="true" range="0 0.0001" solreflimit="0.001" margin="-0.0001" damping="100" stiffness="1000"/>
+                <joint name="ball" type="ball"/>
+
+                <geom name="weld_dst_geom" type="box" size="0.03 0.03 0.03" pos="0 0 0"  rgba="1 0 0 1" contype="0" conaffinity="0"/>
+            </body>
+
+            <!-- <site name="weld_dst_site" type="box" size="0.03 0.03 0.03" pos="0 0 0.5" rgba="1 1 0 1"/> -->
+
+            <geom name="floor" type="plane" size="1 1 1" pos="0 0 0.0" group="1" rgba="0.4 0 0 1"/>
+        </worldbody>
+
+        <equality>
+            <!-- <connect name="test_equality" body1="test" anchor="0 0.1 0"/> -->
+            <!-- <weld body1="test" body2="weld_dst" anchor="0.1 0 0"/> -->
+            <weld name="weld_dst_foot" body1="weld_dst" body2="foot" anchor="0.0 0 0" solref="0.001 1" solimp="0.001 0.999 0.001" relpose="0 0 0 1 0 0 0"/>
+            <!-- <weld name="fix_body" body1="weld_dst" body2="test" active="true"/>
+            <weld name="fix_body2" body1="weld_dst" active="false"/> -->
+            <!-- <weld name="fix_site" site1="weld_dst_site" site2="test_site" active="true"/> -->
+            <!-- <weld name="fix_site" site1="test_site" site2="weld_dst_site" active="true"/> -->
+        </equality>
+
+        <sensor>
+            <jointlimitfrc name="slide_x_limitfrc" joint="slide_x"/>
+            <jointlimitfrc name="slide_y_limitfrc" joint="slide_y"/>
+            <jointlimitfrc name="slide_z_limitfrc" joint="slide_z"/>
+        </sensor>
+
+    </mujoco>
+    
