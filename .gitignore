@@ -52,4 +52,4 @@ videos/
 /MUJOCO_LOG.TXT
 
 # data
-/muscle_flv_extracted/
+/osim_muscle_data_extracted/
