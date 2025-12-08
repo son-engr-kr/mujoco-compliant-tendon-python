@@ -184,12 +184,13 @@ def run_velocity_test(muscle_ref, output_dir="osim_muscle_data_sim", norm_veloci
     muscle_name = muscle_ref.getName()
     print(f"Starting simulation for {muscle_name}...")
     
-    # Set MTU length range from l_opt / l_slack (avoid overly short lengths)
+    # Set MTU length range from l_opt / l_slack
     l_opt = muscle_ref.getOptimalFiberLength()
     l_slack = muscle_ref.getTendonSlackLength()
-    min_len = 0.6 * l_opt
-    max_len = 1.2 * (l_opt + l_slack)
-    print(f"Using MTU length range from l_opt/l_slack: {min_len:.4f} to {max_len:.4f} m")
+    min_len = l_slack
+    max_len = 2.0 * l_opt + l_slack
+    print(f"[{muscle_name}] l_opt={l_opt:.6f}, l_slack={l_slack:.6f}")
+    print(f"[{muscle_name}] MTU range formula: min_len = l_slack -> {min_len:.6f}, max_len = 2.0*l_opt + l_slack -> {max_len:.6f}")
 
     # Define ranges
     num_points = 40 # finer resolution for smoother curve
