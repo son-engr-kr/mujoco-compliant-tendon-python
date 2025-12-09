@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 import csv
-from scipy.optimize import minimize
+from scipy.optimize import minimize, least_squares
 import time
 import sys
 from tqdm import tqdm
@@ -215,13 +215,13 @@ def objective_function(x, target_data, verbose=1):
         if np.isnan(param_val) or np.isinf(param_val):
             if verbose >= 1:
                 print(f"\n[Objective #{_obj_iter_count}] Invalid parameter: {param_name}={param_val}")
-            return 1e10  # Return large error value
-    
+            raise ValueError(f"Invalid parameter: {param_name}={param_val}")
+
     # Check physical constraints
     if F_max <= 0 or l_opt <= 0 or l_slack <= 0 or v_max <= 0:
         if verbose >= 1:
             print(f"\n[Objective #{_obj_iter_count}] Invalid physical parameters: F_max={F_max}, l_opt={l_opt}, l_slack={l_slack}, v_max={v_max}")
-        return 1e10
+        raise ValueError(f"Invalid physical parameters: F_max={F_max}, l_opt={l_opt}, l_slack={l_slack}, v_max={v_max}")
 
     ref_f_max = target_data['f_max']
     mtu_lengths = target_data['mtu_lengths']  # Actual MTU lengths (m)
@@ -243,21 +243,16 @@ def objective_function(x, target_data, verbose=1):
     if verbose >= 2:
         print(f"  Creating MuJoCo model...")
     
-    try:
-        cp_params = CompliantTendonParams(
-            F_max=F_max,
-            l_opt=l_opt,
-            l_slack=l_slack,
-            v_max=v_max,
-            W=W, C=C, N=N, K=K, E_REF=E_REF
-        )
-        
-        model = create_model(cp_params)
-        data = mujoco.MjData(model) # Create data once per objective call
-    except (ValueError, RuntimeError) as e:
-        if verbose >= 1:
-            print(f"\n[Objective #{_obj_iter_count}] Model creation failed: {e}")
-        return 1e10  # Return large error value
+    cp_params = CompliantTendonParams(
+        F_max=F_max,
+        l_opt=l_opt,
+        l_slack=l_slack,
+        v_max=v_max,
+        W=W, C=C, N=N, K=K, E_REF=E_REF
+    )
+    
+    model = create_model(cp_params)
+    data = mujoco.MjData(model) # Create data once per objective call
     
     model_time = time.time() - iter_start_time
     
@@ -267,48 +262,39 @@ def objective_function(x, target_data, verbose=1):
     total_error = 0
     count = 0
     
-    # Sampling stride to speed up optimization
-    l_stride = max(1, len(mtu_lengths) // 5)
-    v_stride = max(1, len(norm_velocities) // 5)
+    # Sampling: Use all length points, fixed v=0
+    l_indices = range(len(mtu_lengths))
     
-    l_indices = list(range(0, len(mtu_lengths), l_stride))
-    v_indices = list(range(0, len(norm_velocities), v_stride))
-    total_points = len(l_indices) * len(v_indices)
+    # Find index of v=0 in norm_velocities for target data extraction
+    v0_idx = np.argmin(np.abs(norm_velocities))
+    
+    total_points = len(l_indices)
     
     if verbose >= 1:
-        print(f"  Evaluating {total_points} points (stride: L={l_stride}, V={v_stride})...")
+        print(f"  Evaluating {total_points} points (All lengths, fixed v=0)...")
     
     sim_start_time = time.time()
     
     # Use MTU lengths directly (already in physical units)
-    target_l_indices = l_indices
-    target_l_phys = mtu_lengths[target_l_indices]  # Direct MTU lengths (m)
+    target_l_phys = mtu_lengths  # Use all lengths
     
-    processed_v = 0
+    # Target forces for v=0 profile across all lengths
+    # force_matrix shape is (n_lengths, n_velocities)
+    f_target_profile = force_matrix[:, v0_idx]
     
-    # Iterate over VELOCITIES (Outer Loop)
-    for j in v_indices:
-        v_norm = norm_velocities[j]
-        v_phy = v_norm * v_max
-        
-        # Target forces for this velocity profile across selected lengths
-        f_target_profile = force_matrix[target_l_indices, j]
-        
-        # Compute simulated forces for this velocity across all target lengths
-        # using the efficient kinematic batch function
-        f_sim_profile = compute_forces_at_velocity(model, data, v_phy, target_l_phys, activation=1.0)
-        
-        # Accumulate Error
-        errs = (f_sim_profile - f_target_profile) / ref_f_max
-        total_error += np.sum(errs**2)
-        count += len(f_sim_profile)
-        
-        processed_v += 1
-        if verbose >= 2 and processed_v % max(1, len(v_indices) // 5) == 0:
-             print(f"    Velocity Progress: {processed_v}/{len(v_indices)} (v_norm={v_norm:.2f})")
-
+    # Compute simulated forces for v=0 across all target lengths
+    v_phy = 0.0 # Fixed v=0
+    f_sim_profile = compute_forces_at_velocity(model, data, v_phy, target_l_phys, activation=1.0)
+    
+    # Calculate Residuals
+    # Normalized by ref_f_max to keep scale consistent
+    all_residuals = (f_sim_profile - f_target_profile) / ref_f_max
+    
+    mse = np.mean(all_residuals**2)
+    
     sim_time = time.time() - sim_start_time
-    mse = total_error / count
+    
+    sim_time = time.time() - sim_start_time
     iter_time = time.time() - iter_start_time
     
     if verbose >= 1:
@@ -319,7 +305,7 @@ def objective_function(x, target_data, verbose=1):
             avg_iter_time = total_elapsed / _obj_iter_count
             print(f"  Average iteration time: {avg_iter_time:.2f}s")
     
-    return mse
+    return all_residuals
 
 
 # %%
@@ -424,7 +410,7 @@ def fit_muscle(muscle_name, data_dir="osim_muscle_data", params_csv="osim_muscle
     
     x0 = [
         base_F, 
-        base_L_opt, 
+        base_L_opt * 0.9, 
         base_L_slack, 
         base_V_max,  # fixed
         0.56, -2.995732274, 1.5, 5.0, 0.04
@@ -432,28 +418,28 @@ def fit_muscle(muscle_name, data_dir="osim_muscle_data", params_csv="osim_muscle
     
     # Bounds: v_max fixed; others allowed to vary
     bounds = [
-        (base_F, base_F),          # F_max
-        (base_L_opt, base_L_opt),  # l_opt
-        (base_L_slack, base_L_slack), # l_slack
-        (base_V_max, base_V_max),              # v_max fixed
-
-        # (base_F * 0.5, base_F * 1.5),          # F_max
-        # (base_L_opt * 0.8, base_L_opt * 1.2),  # l_opt
-        # (base_L_slack * 0.8, base_L_slack * 1.2), # l_slack
+        # (base_F, base_F),          # F_max
+        # (base_L_opt, base_L_opt),  # l_opt
+        # (base_L_slack, base_L_slack), # l_slack
         # (base_V_max, base_V_max),              # v_max fixed
 
-        
-        (0.56, 0.56),                            # W = 0.56
-        (-2.995732274, -2.995732274),                          # C = -2.995732274
-        (1.5, 1.5),                            # N = 1.5
-        (5.0, 5.0),                            # K = 5.0
-        (0.04, 0.04)                           # E_REF = 0.04
+        (base_F * 0.5, base_F * 1.5),          # F_max
+        (base_L_opt * 0.2, base_L_opt * 2.0),  # l_opt
+        (base_L_slack * 0.2, base_L_slack * 2.0), # l_slack
+        (base_V_max, base_V_max + 1e-7),              # v_max fixed
 
-        # (0.1, 2.0),                            # W = 0.56
-        # (-4.5, -2.0),                          # C = -2.995732274
+        
+        # (0.56, 0.56),                            # W = 0.56
+        # (-2.995732274, -2.995732274),                          # C = -2.995732274
         # (1.5, 1.5),                            # N = 1.5
-        # (4.0, 6.0),                            # K = 5.0
-        # (0.01, 3.0)                           # E_REF = 0.04
+        # (5.0, 5.0),                            # K = 5.0
+        # (0.04, 0.04)                           # E_REF = 0.04
+
+        (0.3, 2.0),                            # W = 0.56
+        (-2.995732274, -2.995732274 + 1e-7),                          # C = -2.995732274
+        (1.5, 1.5 + 1e-7),                            # N = 1.5
+        (5.0, 5.0 + 1e-7),                            # K = 5.0
+        (0.03, 0.6)                           # E_REF = 0.04
     ]
     
     print(f"\n[Optimization] Starting optimization...")
@@ -470,24 +456,36 @@ def fit_muscle(muscle_name, data_dir="osim_muscle_data", params_csv="osim_muscle
     def obj_wrapper(x):
         return objective_function(x, target_data, verbose=verbose)
     
-    res = minimize(
+    # Convert bounds for least_squares: ([min_vals], [max_vals])
+    lower_bounds = [b[0] for b in bounds]
+    upper_bounds = [b[1] for b in bounds]
+    ls_bounds = (lower_bounds, upper_bounds)
+
+    res = least_squares(
         obj_wrapper,
         x0,
-        method='L-BFGS-B',
-        bounds=bounds,
-        options={'maxiter': 500},
-        callback=callback_function
+        bounds=ls_bounds,
+        max_nfev=1000,  # Increased max evaluations
+        verbose=2 if verbose >= 1 else 0, # Increased verbosity
+        jac='3-point',  # More accurate Jacobian approximation (slower but more stable)
+        loss='soft_l1', # Robust loss function to handle outliers/noise better than linear (least squares)
+        ftol=1e-6,     # Tighter tolerance for function value change
+        xtol=1e-6,     # Tighter tolerance for independent variable change
+        gtol=1e-6      # Tighter tolerance for gradient norm
     )
     
     opt_time = time.time() - opt_start_time
     print(f"\n[Optimization] Finished in {opt_time:.2f}s")
     print(f"  - Status: {res.message}")
     print(f"  - Success: {res.success}")
-    print(f"  - Final MSE: {res.fun:.6f}")
-    if hasattr(res, 'nit'):
-        print(f"  - Iterations: {res.nit}")
+    # res.cost is 0.5 * sum(residuals**2)
+    # We want MSE = mean(residuals**2)
+    final_mse = np.mean(res.fun**2)
+    print(f"  - Final MSE: {final_mse:.6f}")
+    if hasattr(res, 'nfev'):
+        print(f"  - Iterations (nfev): {res.nfev}")
     else:
-        print(f"  - Iterations: N/A (Fixed by bounds)")
+        print(f"  - Iterations: N/A")
     print(f"\n[Optimization] Fitted Parameters:")
     print(f"  - F_max: {res.x[0]:.2f} (initial: {x0[0]:.2f})")
     print(f"  - l_opt: {res.x[1]:.4f} (initial: {x0[1]:.4f})")
