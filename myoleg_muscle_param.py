@@ -57,8 +57,8 @@ def create_model(cp_params: CompliantTendonParams):
         <body name="ground"/>
         <site name="anchor" pos="0 0 0" size="0.01" rgba="1 0 0 1"/>
 
-        <body name="load" pos="0 0 0">
-            <joint name="slide" type="slide" axis="0 0 1" limited="false" damping="0"/> 
+        <body name="load" pos="0 0 {-(cp_params.l_slack+cp_params.l_opt)}">
+            <joint name="slide" type="slide" axis="0 0 1" limited="false" damping="0" ref="{-(cp_params.l_slack+cp_params.l_opt)}"/> 
             <site name="insertion" pos="0 0 0" size="0.01" rgba="0 1 0 1"/>
             <geom type="sphere" size="0.05" mass="1.0"/>
         </body>
@@ -110,7 +110,7 @@ def compute_forces_at_velocity(model, data, velocity, lengths, activation=1.0):
     forces = []
     
     for length in lengths:
-        for internal_it in range(2):
+        for internal_it in range(4):
             data.qvel[0] = velocity
             data.act[0] = activation
             data.ctrl[0] = activation
@@ -129,6 +129,8 @@ def compute_forces_at_velocity(model, data, velocity, lengths, activation=1.0):
             mujoco.mj_fwdVelocity(model, data)
             mujoco.mj_forward(model, data)
             mujoco.mj_fwdActuation(model, data)
+
+            # print(f"{data.ten_length[0]=}, {data.qpos[0]=}")
 
         
         
@@ -286,10 +288,29 @@ def objective_function(x, target_data, verbose=1):
     v_phy = 0.0 # Fixed v=0
     f_sim_profile = compute_forces_at_velocity(model, data, v_phy, target_l_phys, activation=1.0)
     
-    # Calculate Residuals
-    # Normalized by ref_f_max to keep scale consistent
-    all_residuals = (f_sim_profile - f_target_profile) / ref_f_max
-    
+    # Calculate residuals and filter out pathological simulation points
+    residuals_raw = f_sim_profile - f_target_profile
+
+    # Base validity: finite and not excessively large (>|5 * F_max|)
+    valid_mask = np.isfinite(f_sim_profile) & (np.abs(f_sim_profile) <= 5.0 * ref_f_max)
+
+    # Discontinuity filter: mark points following a large jump as invalid
+    if f_sim_profile.size > 1:
+        jump_thresh = 0.1 * ref_f_max
+        jumps = np.abs(np.diff(f_sim_profile)) > jump_thresh
+        bad_indices = np.where(jumps)[0] + 1  # mark the point after the jump
+        valid_mask[bad_indices] = False
+
+    # Ensure fixed-length residual vector for least_squares:
+    # keep original length, but penalize invalid points heavily.
+    if not np.any(valid_mask):
+        raise ValueError("All simulated points were filtered out (non-finite, over-limit, or discontinuous).")
+
+    penalty = 5.0 * ref_f_max
+    residuals_penalized = residuals_raw.copy()
+    residuals_penalized[~valid_mask] = np.sign(residuals_penalized[~valid_mask]) * penalty
+
+    all_residuals = residuals_penalized  # fixed length
     mse = np.mean(all_residuals**2)
     
     sim_time = time.time() - sim_start_time
@@ -299,6 +320,8 @@ def objective_function(x, target_data, verbose=1):
     
     if verbose >= 1:
         print(f"  Simulation completed: {sim_time:.2f}s")
+        print(f"  Residuals: {all_residuals}")
+
         print(f"  MSE: {mse:.6f}")
         print(f"  Total iteration time: {iter_time:.2f}s")
         if _obj_iter_count > 1:
@@ -312,7 +335,7 @@ def objective_function(x, target_data, verbose=1):
 # ==========================================
 # 6. Plotting Function
 # ==========================================
-def plot_results(best_params, target_data, muscle_name):
+def plot_results(best_params, target_data, muscle_name, initial_params=None):
     print("\n[Plotting] Generating length-only plot (v=0)...")
     F_max, l_opt, l_slack, v_max, W, C, N, K, E_REF = best_params
     cp_params = CompliantTendonParams(
@@ -337,9 +360,23 @@ def plot_results(best_params, target_data, muscle_name):
     ax.set_ylabel("Force (N)")
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize="x-small")
+    
+    # Add fitted parameters as text at the bottom
+    param_text = f"Fitted: F_max={F_max:.2f}, l_opt={l_opt:.2f}, l_slack={l_slack:.2f}, v_max={v_max:.2f}\n"
+    param_text += f"W={W:.2f}, C={C:.2f}, N={N:.2f}, K={K:.2f}, E_REF={E_REF:.2f}"
+    
+    if initial_params is not None:
+        F0, l0, ls0, v0, W0, C0, N0, K0, E0 = initial_params
+        param_text += f"\nInitial: F_max={F0:.2f}, l_opt={l0:.2f}, l_slack={ls0:.2f}, v_max={v0:.2f}\n"
+        param_text += f"W={W0:.2f}, C={C0:.2f}, N={N0:.2f}, K={K0:.2f}, E_REF={E0:.2f}"
+    
+    ax.text(0.5, -0.25, param_text, transform=ax.transAxes, 
+            fontsize=7, ha='center', va='top', 
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
     os.makedirs("mujoco_muscle_data", exist_ok=True)
     out_path = os.path.join("mujoco_muscle_data", f"{muscle_name}_fit_v0.png")
-    fig.tight_layout()
+    fig.tight_layout(rect=[0, 0.15, 1, 0.95])  # Leave more space at bottom
     fig.savefig(out_path, dpi=200)
     plt.close(fig)
     print(f"[Plotting] Saved: {out_path}")
@@ -410,8 +447,8 @@ def fit_muscle(muscle_name, data_dir="osim_muscle_data", params_csv="osim_muscle
     
     x0 = [
         base_F, 
-        base_L_opt * 0.9, 
-        base_L_slack, 
+        base_L_opt * 1.0, 
+        base_L_slack* 1.0, 
         base_V_max,  # fixed
         0.56, -2.995732274, 1.5, 5.0, 0.04
     ]
@@ -424,29 +461,29 @@ def fit_muscle(muscle_name, data_dir="osim_muscle_data", params_csv="osim_muscle
         # (base_V_max, base_V_max),              # v_max fixed
 
         (base_F * 0.5, base_F * 1.5),          # F_max
-        (base_L_opt * 0.2, base_L_opt * 2.0),  # l_opt
-        (base_L_slack * 0.2, base_L_slack * 2.0), # l_slack
+        (base_L_opt * 0.85, base_L_opt * 1.05),  # l_opt
+        (base_L_slack * 0.95, base_L_slack * 1.05), # l_slack
         (base_V_max, base_V_max + 1e-7),              # v_max fixed
 
         
-        # (0.56, 0.56),                            # W = 0.56
-        # (-2.995732274, -2.995732274),                          # C = -2.995732274
-        # (1.5, 1.5),                            # N = 1.5
-        # (5.0, 5.0),                            # K = 5.0
-        # (0.04, 0.04)                           # E_REF = 0.04
+        # (0.56, 0.56 + 1e-7),                            # W = 0.56
+        # (-2.995732274, -2.995732274 + 1e-7),                          # C = -2.995732274
+        # (1.5, 1.5 + 1e-7),                            # N = 1.5
+        # (5.0, 5.0 + 1e-7),                            # K = 5.0
+        # (0.04, 0.04 + 1e-7)                           # E_REF = 0.04
 
-        (0.3, 2.0),                            # W = 0.56
-        (-2.995732274, -2.995732274 + 1e-7),                          # C = -2.995732274
+        (0.1, 1),                            # W = 0.56
+        (-8, -0.01),                          # C = -2.995732274
         (1.5, 1.5 + 1e-7),                            # N = 1.5
         (5.0, 5.0 + 1e-7),                            # K = 5.0
-        (0.03, 0.6)                           # E_REF = 0.04
+        (0.03, 0.5)                           # E_REF = 0.04
     ]
     
-    print(f"\n[Optimization] Starting optimization...")
-    print(f"  - Optimizing 9 parameters: F_max, l_opt, l_slack, v_max, W, C, N, K, E_REF")
-    print(f"  - Initial guess: {x0}")
-    print(f"  - Max iterations: 50")
-    print(f"  - Verbose level: {verbose}")
+    # print(f"\n[Optimization] Starting optimization...")
+    # print(f"  - Optimizing 9 parameters: F_max, l_opt, l_slack, v_max, W, C, N, K, E_REF")
+    # print(f"  - Initial guess: {x0}")
+    # print(f"  - Max iterations: 50")
+    # print(f"  - Verbose level: {verbose}")
     
     _obj_iter_count = 0
     _obj_start_time = time.time()
@@ -465,13 +502,13 @@ def fit_muscle(muscle_name, data_dir="osim_muscle_data", params_csv="osim_muscle
         obj_wrapper,
         x0,
         bounds=ls_bounds,
-        max_nfev=1000,  # Increased max evaluations
+        max_nfev=10000,  # Increased max evaluations
         verbose=2 if verbose >= 1 else 0, # Increased verbosity
         jac='3-point',  # More accurate Jacobian approximation (slower but more stable)
-        loss='soft_l1', # Robust loss function to handle outliers/noise better than linear (least squares)
-        ftol=1e-6,     # Tighter tolerance for function value change
-        xtol=1e-6,     # Tighter tolerance for independent variable change
-        gtol=1e-6      # Tighter tolerance for gradient norm
+        # loss='soft_l1', # Robust loss function to handle outliers/noise better than linear (least squares)
+        ftol=1e-9,     # Tighter tolerance for function value change
+        xtol=1e-9,     # Tighter tolerance for independent variable change
+        gtol=1e-9      # Tighter tolerance for gradient norm
     )
     
     opt_time = time.time() - opt_start_time
@@ -498,15 +535,14 @@ def fit_muscle(muscle_name, data_dir="osim_muscle_data", params_csv="osim_muscle
     print(f"  - E_REF: {res.x[8]:.4f}")
     
     if not res.success:
-        print(f"\n[WARNING] Optimization did not converge successfully!")
-        print(f"  - Message: {res.message}")
+        raise ValueError(f"Optimization did not converge successfully! {res.message}")
     
     print(f"\n[Plotting] Starting to generate plots...")
     sys.stdout.flush()
 
     print(f"[Plotting] Calling plot_results with fitted parameters...")
     sys.stdout.flush()
-    plot_results(res.x, target_data, muscle_name)
+    plot_results(res.x, target_data, muscle_name, initial_params=x0)
     print(f"[Plotting] Plot saved (no plt.show).")
     sys.stdout.flush()
     
@@ -568,6 +604,30 @@ def fit_all_muscles_length_only(data_dir="osim_muscle_data",
             ax.set_ylabel("Force (N)")
             ax.grid(True, alpha=0.3)
             ax.legend(fontsize="x-small")
+            
+            # Calculate initial guess (same as in fit_muscle)
+            base_F = target['f_max']
+            base_L_opt = target['l_opt']
+            base_L_slack = target['l_slack']
+            base_V_max = target['v_max']
+            x0 = [
+                base_F, 
+                base_L_opt * 0.9, 
+                base_L_slack, 
+                base_V_max,
+                0.56, -2.995732274, 1.5, 5.0, 0.04
+            ]
+            
+            # Add fitted parameters as text at the bottom
+            F_max, l_opt, l_slack, v_max, W, C, N, K, E_REF = res
+            F0, l0, ls0, v0, W0, C0, N0, K0, E0 = x0
+            param_text = f"Fit: F={F_max:.2f}, l_o={l_opt:.2f}, l_s={l_slack:.2f}\n"
+            param_text += f"W={W:.2f}, C={C:.2f}, N={N:.2f}, K={K:.2f}, E={E_REF:.2f}\n"
+            param_text += f"Init: F={F0:.2f}, l_o={l0:.2f}, l_s={ls0:.2f}\n"
+            param_text += f"W={W0:.2f}, C={C0:.2f}, N={N0:.2f}, K={K0:.2f}, E={E0:.2f}"
+            ax.text(0.5, -0.25, param_text, transform=ax.transAxes, 
+                    fontsize=5, ha='center', va='top',
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
     # write params CSV
     if fitted_rows:
@@ -587,7 +647,8 @@ def fit_all_muscles_length_only(data_dir="osim_muscle_data",
             row = k // ncols
             col = k % ncols
             fig.delaxes(axes[row][col])
-        fig.tight_layout()
+        # Leave more space at bottom for parameter text and increase spacing between subplots
+        fig.subplots_adjust(bottom=0.20, hspace=0.6, wspace=0.4)
         plot_dir = os.path.dirname(plot_path)
         if plot_dir:
             os.makedirs(plot_dir, exist_ok=True)
