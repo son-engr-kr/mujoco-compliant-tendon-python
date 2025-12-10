@@ -5,7 +5,7 @@ tensordict>=0.2.0
 
 # Environment and simulation
 gymnasium>=0.29.0
-https://github.com/son-engr-kr/mujoco-son/releases/download/v3.3.3%2Bson2.2.1/mujoco-3.3.3+son2-cp311-cp311-win_amd64.whl
+https://github.com/son-engr-kr/mujoco-son/releases/download/v3.3.3%2Bv2.2.3/mujoco-3.3.3+son2-cp311-cp311-win_amd64.whl
 
 
 # Configuration and logging
