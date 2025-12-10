@@ -97,7 +97,7 @@ def main():
     fig, ax = plt.subplots(figsize=(7, 5))
     plt.subplots_adjust(bottom=0.45)
 
-    dense_L = np.linspace(mtu_lengths.min(), mtu_lengths.max(), 100)
+    dense_L = np.linspace(mtu_lengths.min(), mtu_lengths.max(), 40)
     line_data, = ax.plot(mtu_lengths, f_data, "k.", label="data v=0")
     line_fit, = ax.plot(dense_L, np.zeros_like(dense_L), "r-", label="fit v=0")
     ax.set_title(f"{args.muscle} manual fit (v=0)")
